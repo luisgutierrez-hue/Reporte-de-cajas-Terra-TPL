@@ -42,7 +42,7 @@ if archivo_subido is not None:
         df = pd.read_excel(archivo_subido, sheet_name="Reporte de Id de caja", header=fila_encabezado)
 
         # 3. FILTRAR USUARIOS EXCLUIDOS
-        usuarios_excluidos = ['nherrer', 'rafa', 'sebag', 'rodrigo', 'admin']
+        usuarios_excluidos = ['nherrer', 'rafa', 'sebag', 'rodrigo', 'richard', 'admin']
         # Convertimos a minúsculas por si acaso alguien lo escribe diferente
         df = df[~df['Nombre de Usuario'].str.lower().isin([u.lower() for u in usuarios_excluidos])].copy()
 
