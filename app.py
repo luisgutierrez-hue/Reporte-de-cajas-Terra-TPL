@@ -28,29 +28,23 @@ if archivo_subido is not None:
         st.info("Procesando los datos, por favor espera...")
         
         # 2. ENCONTRAR AUTOMÁTICAMENTE LA FILA DE LOS ENCABEZADOS
-        # Leemos el archivo sin encabezados primero para buscar en qué fila están
         df_raw = pd.read_excel(archivo_subido, sheet_name="Reporte de Id de caja", header=None)
         
-        # Buscamos la fila que contiene el texto 'Nombre de Usuario'
         try:
             fila_encabezado = df_raw[df_raw.eq('Nombre de Usuario').any(axis=1)].index[0]
         except IndexError:
             st.error("❌ No se encontró la columna 'Nombre de Usuario' en el archivo. Verifica que sea el formato correcto.")
             st.stop()
             
-        # Volvemos a leer el archivo, pero ahora diciéndole exactamente dónde empiezan los datos
         df = pd.read_excel(archivo_subido, sheet_name="Reporte de Id de caja", header=fila_encabezado)
 
         # 3. FILTRAR USUARIOS EXCLUIDOS
-        usuarios_excluidos = ['nherrer', 'rafa', 'sebag', 'rodrigo', 'richard', 'admin']
-        # Convertimos a minúsculas por si acaso alguien lo escribe diferente
+        usuarios_excluidos = ['nherrer', 'rafa', 'sebag', 'rodrigo', 'admin']
         df = df[~df['Nombre de Usuario'].str.lower().isin([u.lower() for u in usuarios_excluidos])].copy()
 
         # 4. LIMPIEZA Y TRANSFORMACIÓN DE DATOS
-        # Asegurar formato de fecha (eliminar hora)
         df['Fecha y hora apertura caja'] = pd.to_datetime(df['Fecha y hora apertura caja'], errors='coerce').dt.strftime('%d/%m/%Y')
 
-        # Función para limpiar valores monetarios 
         def limpiar_moneda(valor):
             if pd.isna(valor):
                 return 0.0
@@ -61,12 +55,33 @@ if archivo_subido is not None:
             except ValueError:
                 return 0.0
 
-        # Limpiar columnas de dinero
-        df['Total efectivo depósito'] = df['Total efectivo depósito'].apply(limpiar_moneda)
-        df['Tarjetas'] = df['Tarjetas'].apply(limpiar_moneda)
+        # Función auxiliar para encontrar columnas por su Letra de Excel (N, AI, AB, etc.)
+        def obtener_columna_por_letra(dataframe, letra):
+            num = 0
+            for c in letra.upper():
+                num = num * 26 + (ord(c) - ord('A')) + 1
+            idx = num - 1 # Convertir a índice 0-based para Python
+            
+            # Si el archivo tiene suficientes columnas, extrae la que pedimos
+            if idx < len(dataframe.columns):
+                return dataframe.iloc[:, idx]
+            else:
+                # Si la columna no existe en el Excel, devuelve ceros para no romper la suma
+                return pd.Series([0.0] * len(dataframe), index=dataframe.index)
 
-        # 5. CÁLCULO DE LA NUEVA COLUMNA
-        df['Total'] = df['Total efectivo depósito'] + df['Tarjetas']
+        # --- NUEVAS REGLAS DE NEGOCIO ---
+        # "Total efectivo depósito" = Columna N + Columna AI
+        col_N = obtener_columna_por_letra(df, 'N').apply(limpiar_moneda)
+        col_AI = obtener_columna_por_letra(df, 'AI').apply(limpiar_moneda)
+        df['Total efectivo depósito_calc'] = col_N + col_AI
+
+        # "Tarjetas" = Columna AB + Columna AW
+        col_AB = obtener_columna_por_letra(df, 'AB').apply(limpiar_moneda)
+        col_AW = obtener_columna_por_letra(df, 'AW').apply(limpiar_moneda)
+        df['Tarjetas_calc'] = col_AB + col_AW
+
+        # 5. CÁLCULO DEL TOTAL FINAL
+        df['Total_calc'] = df['Total efectivo depósito_calc'] + df['Tarjetas_calc']
 
         # 6. SELECCIONAR Y RENOMBRAR LAS COLUMNAS PARA EL REPORTE FINAL
         df_final = pd.DataFrame({
@@ -74,9 +89,9 @@ if archivo_subido is not None:
             'Código': df['Nombre de Usuario'],
             'Nombre y Documento': df['Nombre y Documento'],
             'Agencia': df['Agencia'],
-            'Total efectivo depósito': df['Total efectivo depósito'],
-            'Tarjetas': df['Tarjetas'],
-            'Total': df['Total']
+            'Total efectivo depósito': df['Total efectivo depósito_calc'], # Columna E
+            'Tarjetas': df['Tarjetas_calc'],                               # Columna F
+            'Total': df['Total_calc']                                      # Columna G
         })
 
         # 7. GENERAR EL EXCEL CON DISEÑO PROFESIONAL
@@ -87,33 +102,26 @@ if archivo_subido is not None:
             workbook = writer.book
             worksheet = workbook['Reporte Terra']
             
-            # Estilos
             color_encabezado = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
             fuente_encabezado = Font(color="FFFFFF", bold=True)
             color_cebra = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
-            
-            # Formato de moneda para columnas de dinero
-            from openpyxl.styles import numbers
             formato_moneda = '#,##0' 
             
-            # Estilizar encabezados
             for cell in worksheet[1]:
                 cell.fill = color_encabezado
                 cell.font = fuente_encabezado
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 
-            # Aplicar color intercalado y formato de números
             for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), start=2):
                 if row_idx % 2 == 0:
                     for cell in row:
                         cell.fill = color_cebra
                 
-                # Dar formato de número a las columnas de Total efectivo, Tarjetas y Total (columnas E, F, G)
-                row[4].number_format = formato_moneda # Total efectivo depósito
-                row[5].number_format = formato_moneda # Tarjetas
-                row[6].number_format = formato_moneda # Total
+                # Aplicar formato de moneda
+                row[4].number_format = formato_moneda # E: Total efectivo
+                row[5].number_format = formato_moneda # F: Tarjetas
+                row[6].number_format = formato_moneda # G: Total
             
-            # Auto-ajustar ancho de columnas
             for col in worksheet.columns:
                 max_length = 0
                 col_letter = get_column_letter(col[0].column)
@@ -126,7 +134,7 @@ if archivo_subido is not None:
                 worksheet.column_dimensions[col_letter].width = max_length + 3
 
         # 8. BOTÓN DE DESCARGA
-        st.success("✅ ¡El reporte se ha generado correctamente sin errores!")
+        st.success("✅ ¡El reporte se ha generado correctamente con las nuevas sumas!")
         st.download_button(
             label="📥 Descargar Reporte Generado",
             data=buffer.getvalue(),
